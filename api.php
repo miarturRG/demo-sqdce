@@ -75,10 +75,10 @@ if ($mode === 'causas') {
            . "## Máquina\n- ...\n## Material\n- ...\n## Mano de obra\n- ...\n"
            . "Son hipótesis para verificar en piso, no conclusiones.\n\n"
            . "No agregues introducción ni otras secciones. Máximo 170 palabras.";
-    $maxTokens = 700;
+    $maxTokens = 1200;
 } else {
     $instr = 'Responde en máximo 90 palabras.';
-    $maxTokens = 400;
+    $maxTokens = 700;
 }
 $user = $context . "\n\nPREGUNTA DEL SUPERVISOR: " . $question . "\n\n" . $instr;
 
@@ -87,25 +87,37 @@ $payload = [
     'max_tokens' => $maxTokens,
     'system' => $system,
     'messages' => [['role' => 'user', 'content' => $user]],
+    'thinking' => ['type' => 'disabled'], // respuesta directa: la demo necesita velocidad
 ];
 
-$ch = curl_init('https://api.anthropic.com/v1/messages');
-curl_setopt_array($ch, [
-    CURLOPT_POST => true,
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_CONNECTTIMEOUT => 5,
-    CURLOPT_TIMEOUT => 25,
-    CURLOPT_HTTPHEADER => [
-        'content-type: application/json',
-        'x-api-key: ' . $apiKey,
-        'anthropic-version: 2023-06-01',
-    ],
-    CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
-]);
-$resp = curl_exec($ch);
-$status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-$err = curl_error($ch);
-curl_close($ch);
+function callClaude(array $payload, string $apiKey): array {
+    $ch = curl_init('https://api.anthropic.com/v1/messages');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_TIMEOUT => 25,
+        CURLOPT_HTTPHEADER => [
+            'content-type: application/json',
+            'x-api-key: ' . $apiKey,
+            'anthropic-version: 2023-06-01',
+        ],
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+    ]);
+    $resp = curl_exec($ch);
+    $status = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err = curl_error($ch);
+    curl_close($ch);
+    return [$resp, $status, $err];
+}
+
+[$resp, $status, $err] = callClaude($payload, $apiKey);
+// Si el modelo no acepta el parámetro thinking, reintenta sin él
+if ($status === 400 && is_string($resp) && stripos($resp, 'thinking') !== false) {
+    unset($payload['thinking']);
+    $payload['max_tokens'] = $maxTokens + 2000;
+    [$resp, $status, $err] = callClaude($payload, $apiKey);
+}
 
 if ($resp === false) out(['error' => 'No se pudo conectar con Claude: ' . $err], 502);
 $j = json_decode((string)$resp, true);
@@ -114,8 +126,13 @@ if ($status !== 200) {
     out(['error' => 'Claude respondió ' . $status . ': ' . $msg], 502);
 }
 $text = '';
+$types = [];
 foreach (($j['content'] ?? []) as $block) {
+    $types[] = (string)($block['type'] ?? '?');
     if (($block['type'] ?? '') === 'text') $text .= (string)$block['text'];
 }
-if (trim($text) === '') out(['error' => 'Respuesta vacía.'], 502);
+if (trim($text) === '') {
+    out(['error' => 'Respuesta vacía (modelo: ' . ($j['model'] ?? '?') . ', stop_reason: ' . ($j['stop_reason'] ?? '?')
+        . ', bloques: ' . (implode(',', $types) ?: 'ninguno') . ')'], 502);
+}
 out(['text' => $text]);
