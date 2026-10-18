@@ -53,7 +53,8 @@ function rateOk(string $bucket, int $max, int $window): bool {
     flock($fp, LOCK_UN); fclose($fp);
     return $ok;
 }
-$ip = $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? 'x';
+// Detrás de nginx (VPS) la IP real llega en X-Real-IP; en hosting directo, REMOTE_ADDR
+$ip = $_SERVER['HTTP_X_REAL_IP'] ?? $_SERVER['HTTP_CF_CONNECTING_IP'] ?? $_SERVER['REMOTE_ADDR'] ?? 'x';
 if (!rateOk('ip:' . $ip, (int)($cfg['max_por_ip_hora'] ?? 30), 3600)) out(['error' => 'Demasiadas consultas. Intenta más tarde.'], 429);
 if (!rateOk('global', (int)($cfg['max_por_dia'] ?? 300), 86400)) out(['error' => 'Se alcanzó el límite diario de la demo.'], 429);
 
